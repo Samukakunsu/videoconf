@@ -47,7 +47,29 @@
   /* Reunião (estilo Meet) */
   #meet{position:fixed;inset:0;display:flex;flex-direction:column;background:#202124}
   .main{flex:1;display:flex;min-height:0;position:relative}
-  #stage{flex:1;display:grid;gap:8px;padding:8px;min-height:0;grid-auto-rows:1fr}
+  #stage{flex:1;position:relative;gap:8px;padding:8px;min-height:0}
+  #stage.grid{display:grid;grid-auto-rows:1fr}
+  #stage.pip{display:block}
+  #stage.pip>.tile{position:absolute;inset:8px}
+  #stage.pip>.tile.pip{inset:auto 20px 16px auto;width:240px;height:auto;aspect-ratio:16/9;z-index:5;box-shadow:0 4px 18px #000a}
+  #stage.present{display:grid;grid-template-columns:minmax(0,1fr) 240px;grid-template-rows:minmax(0,1fr)}
+  #stage.present>.spot,#stage.present>#pcard{grid-column:1;grid-row:1}
+  #side{display:none}
+  #stage.present>#side{display:flex;flex-direction:column;gap:8px;grid-column:2;grid-row:1;overflow-y:auto;min-height:0}
+  #side>.tile{flex:none;aspect-ratio:16/9;width:100%}
+  .tile .avatar{position:absolute;inset:0;display:none;place-items:center;background:#3c4043}
+  .tile.cam-off .avatar{display:grid}
+  .tile.cam-off video{visibility:hidden}
+  .avatar i{font-style:normal;width:clamp(56px,14vmin,128px);height:clamp(56px,14vmin,128px);border-radius:50%;display:grid;place-items:center;color:#fff;font-size:clamp(28px,7vmin,64px);font-weight:500}
+  #side .avatar i,#stage.pip>.tile.pip .avatar i{width:56px;height:56px;font-size:28px}
+  .tile .mic{position:absolute;top:10px;right:10px;width:28px;height:28px;border-radius:50%;background:#000a;color:#fff;display:none;place-items:center}
+  .tile.mic-off .mic{display:grid}
+  .tile .mic svg{width:16px;height:16px;fill:currentColor}
+  .tile.speaking{outline:3px solid #8ab4f8;outline-offset:-3px}
+  #pcard{background:#3c4043;border-radius:12px;display:grid;place-items:center;text-align:center;padding:20px;min-height:0;color:#e8eaed}
+  #pcard h2{font-size:20px;font-weight:500;margin:14px 0 18px}
+  #pcard svg{width:72px;height:72px;color:#a8c7fa}
+  #pcard .btn{border-radius:24px}
   .tile{position:relative;background:#3c4043;border-radius:12px;overflow:hidden;min-height:0}
   .tile video{width:100%;height:100%;object-fit:cover;display:block;background:#3c4043}
   .tile.contain video{object-fit:contain;background:#000}
@@ -92,6 +114,10 @@
     .cc{gap:8px}
     .ib{width:44px;height:44px}
     .ib.leave{width:56px}
+    #stage.present{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) 104px}
+    #stage.present>#side{grid-column:1;grid-row:2;flex-direction:row;overflow-x:auto;overflow-y:hidden}
+    #side>.tile{width:auto;height:100%;aspect-ratio:16/9}
+    #stage.pip>.tile.pip{width:108px;aspect-ratio:3/4;inset:auto 12px 12px auto}
   }
 </style>
 </head>
@@ -144,7 +170,16 @@
 
 <div id="meet" class="hidden">
   <div class="main">
-    <div id="stage"></div>
+    <div id="stage" class="grid">
+      <div id="side"></div>
+      <div id="pcard" class="hidden">
+        <div>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="19" height="13" rx="2.2"/><path d="M12 14V8.2M9.2 10.8 12 8l2.8 2.8M8 20.5h8"/></svg>
+          <h2>Você está apresentando para todos</h2>
+          <button class="btn" id="pstop">Parar apresentação</button>
+        </div>
+      </div>
+    </div>
     <aside id="chat" class="hidden">
       <h3>Mensagens na chamada</h3>
       <div id="msgs"></div>
@@ -258,36 +293,92 @@ function syncButtons(){
 }
 
 /* ---------- tiles ---------- */
+const states={}, meters={};
+let actx=null;
+const AV_COLORS=['#8430ce','#188038','#1a73e8','#c5221f','#b06000','#007b83','#a142f4','#d01884'];
+function colorFor(n){ let h=0; for(const c of n) h=(h*31+c.charCodeAt(0))>>>0; return AV_COLORS[h%AV_COLORS.length]; }
+function curState(){ return {cam:camOn&&realCam,mic:micOn,share:sharing}; }
+function stateOf(id){ return id==='me' ? curState() : (states[id]||{cam:false,mic:false,share:false}); }
+function sendState(){ broadcast(Object.assign({t:'state'},curState())); }
+function presenterId(){ for(const id in tiles){ if(id!=='me'&&states[id]&&states[id].share) return id; } return null; }
+const MICOFF_PATH='M19 11h-1.7c0 .74-.16 1.43-.43 2.05l1.23 1.23c.56-.98.9-2.09.9-3.28zm-4.02.17c0-.06.02-.11.02-.17V5c0-1.66-1.34-3-3-3S9 3.34 9 5v.18l5.98 5.99zM4.27 3L3 4.27l6.01 6.01V11c0 1.66 1.33 3 2.99 3 .22 0 .44-.03.65-.08l1.66 1.66c-.71.33-1.5.52-2.31.52-2.76 0-5.3-2.1-5.3-5.1H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c.91-.13 1.77-.45 2.54-.9L19.73 21 21 19.73 4.27 3z';
+
+function refreshTile(id){
+  const t=tiles[id]; if(!t) return;
+  const me=id==='me', st=stateOf(id);
+  const nm=me?myName:(names[id]||'Participante');
+  t.el.classList.toggle('cam-off', me ? !st.cam : !(st.cam||st.share));
+  t.el.classList.toggle('mic-off', !st.mic);
+  t.ai.textContent=(nm.trim().charAt(0)||'?').toUpperCase();
+  t.ai.parentNode.style.background='#3c4043';
+  t.ai.style.background=colorFor(nm);
+  t.nm.textContent = nm + (me?' (você)':'') + (id===presenterId()?' (apresentando)':'');
+}
 function layout(){
-  const n=Object.keys(tiles).length, st=$('stage');
-  const mobile = innerWidth<700;
-  let cols = mobile ? (n<=2?1:2) : (n<=1?1:n<=4?2:3);
-  st.style.gridTemplateColumns=`repeat(${cols},1fr)`;
+  const ids=Object.keys(tiles), n=ids.length, st=$('stage'), side=$('side');
+  const pres=presenterId(), iPresent=sharing&&!pres;
+  const mode=(pres||iPresent)?'present':(n===2?'pip':'grid');
+  st.className=mode;
+  $('pcard').classList.toggle('hidden',!iPresent);
+  ids.forEach(id=>{
+    const t=tiles[id], spot=id===pres;
+    t.el.classList.toggle('spot',spot);
+    t.el.classList.toggle('contain',spot);
+    t.el.classList.toggle('pip',mode==='pip'&&id==='me');
+    const target=(mode==='present'&&!spot)?side:st;
+    if(t.el.parentNode!==target){ target.appendChild(t.el); t.v.play&&t.v.play().catch(()=>{}); }
+    refreshTile(id);
+  });
+  if(mode==='grid'){
+    const mobile=innerWidth<700;
+    const cols=mobile?(n<=2?1:2):(n<=1?1:n<=4?2:3);
+    st.style.gridTemplateColumns=`repeat(${cols},1fr)`;
+  }else st.style.gridTemplateColumns='';
   $('count').textContent = n===1 ? '1 pessoa' : n+' pessoas';
 }
 addEventListener('resize',layout);
 function addTile(id,name,stream,isMe){
   let t=tiles[id];
   if(!t){
-    const el=document.createElement('div'); el.className='tile'+(isMe?' me':'');
-    const v=document.createElement('video'); v.autoplay=true; v.playsInline=true; if(isMe){v.muted=true; if(realCam) v.classList.add('mirror');}
+    const el=document.createElement('div'); el.className='tile cam-off mic-off'+(isMe?' me':'');
+    const v=document.createElement('video'); v.autoplay=true; v.playsInline=true;
+    if(isMe){ v.muted=true; if(realCam) v.classList.add('mirror'); }
+    const av=document.createElement('div'); av.className='avatar';
+    const ai=document.createElement('i'); av.appendChild(ai);
+    const mic=document.createElement('div'); mic.className='mic';
+    mic.innerHTML='<svg viewBox="0 0 24 24"><path d="'+MICOFF_PATH+'"/></svg>';
     const nm=document.createElement('div'); nm.className='nm';
-    el.append(v,nm);
-    el.ondblclick=()=>el.classList.toggle('contain');
+    el.append(v,av,mic,nm);
     $('stage').appendChild(el);
-    t=tiles[id]={el,v,nm};
+    t=tiles[id]={el,v,nm,ai};
   }
-  if(stream && t.v.srcObject!==stream) t.v.srcObject=stream;
-  t.nm.textContent = (name||'Participante') + (isMe?' (você)':'');
+  if(stream && t.v.srcObject!==stream){ t.v.srcObject=stream; watchAudio(id,stream); }
   layout();
   return t;
 }
-function setLocalView(){
-  const t=tiles.me; if(!t) return;
-  t.v.srcObject = sharing ? screenStream : local;
-  t.v.classList.toggle('mirror',!sharing&&realCam);
-  t.el.classList.toggle('contain',sharing);
+function setLocalView(){ layout(); }
+
+/* destaque de quem está falando */
+function watchAudio(id,stream){
+  unwatch(id);
+  if(!stream.getAudioTracks().length) return;
+  try{
+    actx=actx||new (window.AudioContext||window.webkitAudioContext)();
+    if(actx.state==='suspended') actx.resume().catch(()=>{});
+    const src=actx.createMediaStreamSource(stream), an=actx.createAnalyser();
+    an.fftSize=512; src.connect(an);
+    meters[id]={src,an,buf:new Uint8Array(an.fftSize)};
+  }catch(e){}
 }
+function unwatch(id){ const m=meters[id]; if(m){ try{m.src.disconnect()}catch(e){} delete meters[id]; } }
+setInterval(()=>{
+  for(const id in meters){
+    const m=meters[id], t=tiles[id]; if(!t) continue;
+    m.an.getByteTimeDomainData(m.buf);
+    let mx=0; for(let i=0;i<m.buf.length;i++){ const x=Math.abs(m.buf[i]-128); if(x>mx) mx=x; }
+    t.el.classList.toggle('speaking', mx>12 && stateOf(id).mic);
+  }
+},180);
 
 /* ---------- chat ---------- */
 function addMsg(name,text,me,sys){
@@ -317,7 +408,7 @@ function drop(id){
   if(t){ t.v.srcObject=null; t.el.remove(); delete tiles[id]; if(names[id]) addMsg('',`${names[id]} saiu`,false,true); }
   const c=calls[id]; delete calls[id]; if(c){ try{c.close()}catch(e){} }
   const d=convs[id]; delete convs[id]; if(d){ try{d.close()}catch(e){} }
-  delete names[id];
+  delete names[id]; delete states[id]; unwatch(id);
   layout();
 }
 function replaceVideo(track){
@@ -342,15 +433,16 @@ function setupConn(conn){
   const id=conn.peer;
   conn.on('open',()=>{
     convs[id]=conn;
-    conn.send({t:'hello',name:myName});
+    conn.send(Object.assign({t:'hello',name:myName},curState()));
   });
   conn.on('data',d=>{
     if(!d) return;
-    if(d.t==='hello'){
-      const first=!names[id];
-      names[id]=String(d.name||'Participante').slice(0,30);
-      if(tiles[id]) addTile(id,names[id]);
+    if(d.t==='hello'||d.t==='state'){
+      const hello=d.t==='hello', first=hello&&!names[id];
+      if(hello) names[id]=String(d.name||'Participante').slice(0,30);
+      states[id]={cam:!!d.cam,mic:!!d.mic,share:!!d.share};
       if(first) addMsg('',`${names[id]} entrou`,false,true);
+      layout();
     }else if(d.t==='chat'){
       addMsg(String(d.name||'Participante').slice(0,30),String(d.text||'').slice(0,500),false);
     }
@@ -430,6 +522,10 @@ function leave(){
   if(peer){ try{peer.destroy()}catch(e){} peer=null; }
   Object.keys(tiles).forEach(id=>{ tiles[id].v.srcObject=null; tiles[id].el.remove(); delete tiles[id]; });
   Object.keys(names).forEach(k=>delete names[k]);
+  Object.keys(states).forEach(k=>delete states[k]);
+  Object.keys(meters).forEach(unwatch);
+  if(actx){ actx.close().catch(()=>{}); actx=null; }
+  $('pcard').classList.add('hidden');
   stopLocal();
   chatOpen=false; $('chat').classList.add('hidden'); $('bchat').classList.remove('on');
   $('meet').classList.add('hidden'); $('lobby-wrap').classList.remove('hidden');
@@ -439,11 +535,11 @@ function leave(){
 /* ---------- controles ---------- */
 $('bmic').onclick=()=>{
   if(!local||!local.getAudioTracks().length){ toast('Microfone indisponível',true); return; }
-  micOn=!micOn; local.getAudioTracks().forEach(t=>t.enabled=micOn); syncButtons();
+  micOn=!micOn; local.getAudioTracks().forEach(t=>t.enabled=micOn); syncButtons(); refreshTile('me'); sendState();
 };
 $('bcam').onclick=()=>{
   if(!realCam){ toast('Câmera indisponível',true); return; }
-  camOn=!camOn; local.getVideoTracks()[0].enabled=camOn; syncButtons();
+  camOn=!camOn; local.getVideoTracks()[0].enabled=camOn; syncButtons(); refreshTile('me'); sendState();
 };
 $('bshare').onclick=async()=>{
   if(!sharing){
@@ -451,15 +547,16 @@ $('bshare').onclick=async()=>{
     sharing=true;
     const tr=screenStream.getVideoTracks()[0];
     tr.onended=stopShare;
-    replaceVideo(tr); setLocalView(); syncButtons();
+    replaceVideo(tr); setLocalView(); syncButtons(); sendState();
   }else stopShare();
 };
 function stopShare(){
   if(!sharing) return;
   sharing=false;
   if(screenStream){ screenStream.getTracks().forEach(t=>t.stop()); screenStream=null; }
-  replaceVideo(local.getVideoTracks()[0]); setLocalView(); syncButtons();
+  replaceVideo(local.getVideoTracks()[0]); setLocalView(); syncButtons(); sendState();
 }
+$('pstop').onclick=stopShare;
 $('bleave').onclick=leave;
 $('join').onclick=start;
 $('copy').onclick=async()=>{
